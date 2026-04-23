@@ -9,9 +9,9 @@ from crewai import Agent, Task, Crew, Process
 from audio_recorder_streamlit import audio_recorder
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="English Grammar Coach", page_icon="🎓")
-st.title("🎓 English Grammar Coach")
-st.caption("Answer my question out loud — I'll help you speak more naturally!")
+st.set_page_config(page_title="English Fluency Coach", page_icon="🎓")
+st.title("🎓 English Fluency Coach")
+st.caption("Answer my question out loud — I'll help you sound more natural!")
 
 # ── API key ───────────────────────────────────────────────────────────────────
 groq_key = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
@@ -25,14 +25,36 @@ groq_client = Groq(api_key=groq_key)
 @st.cache_resource
 def get_agent():
     return Agent(
-        role="English Grammar Coach",
-        goal="Help the student speak English more naturally and correctly.",
-        backstory="""You are a friendly English teacher.
-        When given a sentence, you:
-        1. Provide the corrected sentence first, clearly labelled.
-        2. Explain ONE key mistake in simple language (1-2 sentences max).
-        3. If the sentence is already correct, say 'Great job! That was perfect.'
-        Keep your response short and encouraging.""",
+        role="English Fluency Coach",
+        goal="Help the student sound more natural and fluent in everyday spoken English.",
+        backstory="""You are a friendly English fluency coach helping non-native speakers
+        sound more natural in everyday conversation.
+
+        Your focus is spoken fluency — how a fluent English speaker would naturally say something
+        in real conversation. You are NOT a grammar checker and do NOT focus on written grammar rules.
+
+        When the student gives a response, follow these rules:
+
+        1. ASSESS naturalness: Would a fluent English speaker say it this way in casual conversation?
+
+        2. If the sentence sounds UNNATURAL or STIFF:
+           - Offer a more natural way to say it, starting with "A more natural way to say this is: ..."
+           - Briefly explain WHY it sounds more natural in 1 sentence. Focus on word choice,
+             phrasing, or flow — not grammar rules.
+           - Keep your full response to 3 sentences maximum.
+
+        3. If the sentence already sounds NATURAL and FLUENT:
+           - Give a short, warm acknowledgement like "That sounds great!" or "Very natural!"
+           - Do NOT suggest rewrites. Do NOT offer alternatives.
+           - Move on naturally, as if in a real conversation.
+
+        Examples of unnatural → natural upgrades:
+        - "I ate rice for breakfast" → "I had rice for breakfast"
+        - "I am going to the market for buying vegetables" → "I'm going to the market to buy some vegetables"
+        - "She is very funny person" → "She's such a funny person"
+        - "I work in a school from 5 years" → "I've been working at a school for 5 years"
+
+        Always be warm, encouraging, and brief. Never lecture.""",
         llm="groq/llama-3.3-70b-versatile",
         verbose=False,
     )
@@ -59,17 +81,24 @@ def transcribe(audio_bytes: bytes) -> str:
             )
     return result.text.strip()
 
-def correct_grammar(sentence: str) -> str:
+def get_feedback(sentence: str) -> str:
     task = Task(
-        description=f"Review this sentence for grammar and fluency: \"{sentence}\"",
-        expected_output="Corrected sentence + brief explanation of one key mistake (or praise if correct).",
+        description=(
+            f"The student said: \"{sentence}\"\n"
+            f"Assess whether this sounds natural in spoken English. "
+            f"If it needs improvement, offer a more natural way to say it and explain why in one sentence. "
+            f"If it already sounds fluent and natural, give a brief warm acknowledgement only."
+        ),
+        expected_output=(
+            "Either: 'A more natural way to say this is: <version>. <one sentence explanation>.' "
+            "Or: A short warm acknowledgement if the sentence is already natural."
+        ),
         agent=get_agent(),
     )
     crew = Crew(agents=[get_agent()], tasks=[task], process=Process.sequential)
     return crew.kickoff().raw
 
 def make_audio_b64(text: str) -> str:
-    """Generate gTTS audio and return as base64 string."""
     tts = gTTS(text=text, lang="en", slow=False)
     buf = io.BytesIO()
     tts.write_to_fp(buf)
@@ -77,9 +106,9 @@ def make_audio_b64(text: str) -> str:
     return base64.b64encode(buf.read()).decode()
 
 def autoplay_audio(b64: str):
-    """Inject hidden audio tag that autoplays — no visible player."""
     st.markdown(
-        f'<audio autoplay style="display:none"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>',
+        f'<audio autoplay style="display:none">'
+        f'<source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>',
         unsafe_allow_html=True,
     )
 
@@ -92,8 +121,10 @@ if "question_asked" not in st.session_state:
     st.session_state.question_asked = False
 if "audio_enabled" not in st.session_state:
     st.session_state.audio_enabled = True
+if "last_played_index" not in st.session_state:
+    st.session_state.last_played_index = -1
 
-# ── Audio toggle button ───────────────────────────────────────────────────────
+# ── Audio toggle ──────────────────────────────────────────────────────────────
 col_tog, _ = st.columns([1, 5])
 with col_tog:
     label = "🔊 Audio ON" if st.session_state.audio_enabled else "🔇 Audio OFF"
@@ -117,15 +148,16 @@ if not all_done and not st.session_state.question_asked:
     st.session_state.question_asked = True
 
 # ── Render chat history ───────────────────────────────────────────────────────
-for i, msg in enumerate(st.session_state.messages):
+for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ── Autoplay audio for the latest assistant message only ─────────────────────
-if st.session_state.audio_enabled and st.session_state.messages:
-    last = st.session_state.messages[-1]
-    if last["role"] == "assistant" and "audio_b64" in last:
-        autoplay_audio(last["audio_b64"])
+# ── Autoplay unplayed assistant messages ──────────────────────────────────────
+if st.session_state.audio_enabled:
+    for i, msg in enumerate(st.session_state.messages):
+        if i > st.session_state.last_played_index and msg["role"] == "assistant" and "audio_b64" in msg:
+            autoplay_audio(msg["audio_b64"])
+            st.session_state.last_played_index = i
 
 # ── All done ──────────────────────────────────────────────────────────────────
 if all_done:
@@ -134,6 +166,7 @@ if all_done:
         st.session_state.messages = []
         st.session_state.prompt_index = 0
         st.session_state.question_asked = False
+        st.session_state.last_played_index = -1
         st.rerun()
     st.stop()
 
@@ -161,8 +194,8 @@ with col2:
 # ── Process answer ────────────────────────────────────────────────────────────
 def handle_answer(user_text: str):
     st.session_state.messages.append({"role": "user", "content": user_text})
-    with st.spinner("Reviewing your sentence..."):
-        feedback = correct_grammar(user_text)
+    with st.spinner("Listening..."):
+        feedback = get_feedback(user_text)
     st.session_state.messages.append({
         "role": "assistant",
         "content": feedback,
